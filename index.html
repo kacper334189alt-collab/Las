@@ -3,389 +3,298 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Ziomeczki Beat 'Em Up</title>
-    <!-- Tailwind CSS for UI overlays -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Cannon.js for realistic physics & ragdolls -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <title>VR Beat 'Em Up - Thunderball</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #0f172a; font-family: 'Inter', sans-serif; user-select: none; }
-        #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 2rem; box-sizing: border-box; z-index: 10; }
-        .interactive { pointer-events: auto; }
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: Arial, sans-serif;
+            color: #fff;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px 20px;
+            border-radius: 8px;
+            pointer-events: none;
+            box-shadow: 0 0 10px rgba(0,255,200,0.3);
+        }
+        h1 { margin: 0 0 5px 0; font-size: 20px; color: #00ffcc; }
+        p { margin: 5px 0; font-size: 14px; }
     </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+          "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+        }
+      }
+    </script>
 </head>
 <body>
-
-    <div id="ui-overlay">
-        <div class="flex justify-between items-start">
-            <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700 text-white p-4 rounded-2xl shadow-2xl interactive">
-                <h1 class="text-2xl font-black text-rose-500 tracking-wider">VR ZIOMECZKI ARENA</h1>
-                <p class="text-slate-400 text-sm mt-1">Uderzaj nadchodzących ziomeczków! (Meta Quest Ready)</p>
-                <div class="mt-3 flex gap-4 text-sm font-semibold">
-                    <div>FALA: <span id="wave-counter" class="text-amber-400">1</span></div>
-                    <div>PUNKTY: <span id="score-counter" class="text-emerald-400">0</span></div>
-                </div>
-            </div>
-            <div id="health-box" class="bg-slate-900/80 backdrop-blur-md border border-slate-700 text-white px-6 py-4 rounded-2xl shadow-2xl">
-                <div class="text-xs text-slate-400 uppercase tracking-widest font-bold">ŻYCIE GRACZA</div>
-                <div id="health-bar" class="text-2xl font-black text-rose-500 mt-1">100 / 100</div>
-            </div>
-        </div>
-
-        <div id="start-screen" class="self-center bg-slate-900/90 border border-slate-700 p-8 rounded-3xl text-center text-white max-w-md shadow-2xl interactive">
-            <h2 class="text-3xl font-black mb-3 text-indigo-400">Witaj w VR Beat 'Em Up!</h2>
-            <p class="text-slate-300 text-sm mb-6 leading-relaxed">Załóż gogle Meta Quest, kliknij przycisk VR poniżej i przygotuj się na obronę przed falą ziomeczków. Ciosy pięściami zadają obrażenia. Pokonani wragdollują i znikają po 5 sekundach!</p>
-            <div id="vr-button-container" class="flex justify-center"></div>
-        </div>
+    <div id="info">
+        <h1>VR Beat 'Em Up - Thunderball</h1>
+        <p>Broń: <b>Thunderball (Watch Dogs 2)</b> w prawej ręce</p>
+        <p>Zasada: <b>2 ciosy = eliminacja ziomeczka</b></p>
+        <p>Ragdolle znikają po 5 sekundach.</p>
     </div>
-
-    <!-- Import Three.js and VRButton via ES modules to ensure correct Meta Quest WebXR compatibility -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-            }
-        }
-    </script>
 
     <script type="module">
         import * as THREE from 'three';
         import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import * as CANNON from 'cannon-es';
 
-        let scene, camera, renderer, world;
-        let controllers = [];
-        let enemies = [];
-        let ragdolls = []; 
-        
-        let playerHealth = 100;
-        let score = 0;
+        // SCENA I RENDERER
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a24);
+        scene.fog = new THREE.FogExp2(0x1a1a24, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.6, 3);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        document.body.appendChild(VRButton.createButton(renderer));
+
+        // ŚWIATŁO
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(5, 12, 5);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        // FIZYKA CANNON.JS
+        const world = new CANNON.World();
+        world.gravity.set(0, -9.82, 0);
+
+        // PODŁOGA
+        const floorGeo = new THREE.PlaneGeometry(50, 50);
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x222228, roughness: 0.8 });
+        const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+        floorMesh.rotation.x = -Math.PI / 2;
+        floorMesh.receiveShadow = true;
+        scene.add(floorMesh);
+
+        const floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+        floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        world.addBody(floorBody);
+
+        // KONTROLERY VR
+        const controllerRight = renderer.xr.getController(1);
+        scene.add(controllerRight);
+
+        // STWORZENIE BRONI: THUNDERBALL
+        const handleMesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.015, 0.015, 0.12),
+            new THREE.MeshStandardMaterial({ color: 0x111111 })
+        );
+        controllerRight.add(handleMesh);
+
+        const ballGeo = new THREE.SphereGeometry(0.06, 32, 32);
+        const ballMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
+        const ballMesh = new THREE.Mesh(ballGeo, ballMat);
+
+        // Osiemka na bili
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(64, 64, 40, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#000000'; ctx.font = 'bold 50px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('8', 64, 64);
+        const numTexture = new THREE.CanvasTexture(canvas);
+        const numGeo = new THREE.SphereGeometry(0.061, 32, 32);
+        const numMat = new THREE.MeshBasicMaterial({ map: numTexture, transparent: true, opacity: 0.9 });
+        const numMesh = new THREE.Mesh(numGeo, numMat);
+        ballMesh.add(numMesh);
+        scene.add(ballMesh);
+
+        // Fizyka kuli
+        const ballBody = new CANNON.Body({ mass: 0.5, shape: new CANNON.Sphere(0.06) });
+        ballBody.position.set(0, 1.5, 0);
+        world.addBody(ballBody);
+
+        // Łańcuch
+        const chainGeo = new THREE.CylinderGeometry(0.005, 0.005, 1);
+        const chainMat = new THREE.MeshBasicMaterial({ color: 0x888888 });
+        const chainMesh = new THREE.Mesh(chainGeo, chainMat);
+        scene.add(chainMesh);
+
+        // LOGIKA WROGÓW (ZIOMECZKI)
+        const enemies = [];
+        const ragdolls = [];
         let currentWave = 1;
-        let enemiesInWave = 5;
-        let enemiesSpawnedThisWave = 0;
-        let spawnTimer = 0;
-        let gameActive = false;
-
-        let prevControllerPositions = [new THREE.Vector3(), new THREE.Vector3()];
-        let controllerVelocities = [new THREE.Vector3(), new THREE.Vector3()];
-
-        init();
-
-        function init() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0f172a);
-            scene.fog = new THREE.FogExp2(0x0f172a, 0.015);
-
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 1.6, 0);
-
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
-
-            const vrBtn = VRButton.createButton(renderer);
-            document.getElementById('vr-button-container').appendChild(vrBtn);
-
-            renderer.xr.addEventListener('sessionstart', () => {
-                gameActive = true;
-                document.getElementById('start-screen').style.display = 'none';
-            });
-
-            renderer.xr.addEventListener('sessionend', () => {
-                gameActive = false;
-                document.getElementById('start-screen').style.display = 'block';
-            });
-
-            world = new CANNON.World();
-            world.gravity.set(0, -9.82, 0);
-            world.broadphase = new CANNON.NaiveBroadphase();
-            world.solver.iterations = 10;
-
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambientLight);
-
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(10, 20, 10);
-            scene.add(dirLight);
-
-            // Floor setup
-            const floorGeo = new THREE.PlaneGeometry(50, 50);
-            const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 });
-            const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-            floorMesh.rotation.x = -Math.PI / 2;
-            scene.add(floorMesh);
-
-            const floorBody = new CANNON.Body({
-                mass: 0,
-                shape: new CANNON.Plane()
-            });
-            floorBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            world.add(floorBody);
-
-            const grid = new THREE.GridHelper(50, 50, 0x3b82f6, 0x334155);
-            grid.position.y = 0.01;
-            scene.add(grid);
-
-            for (let i = 0; i < 2; i++) {
-                const controller = renderer.xr.getController(i);
-                scene.add(controller);
-                controllers.push(controller);
-
-                const fistGeo = new THREE.SphereGeometry(0.1, 16, 16);
-                const fistMat = new THREE.MeshStandardMaterial({ color: i === 0 ? 0xef4444 : 0x3b82f6, roughness: 0.3 });
-                const fistMesh = new THREE.Mesh(fistGeo, fistMat);
-                controller.add(fistMesh);
-            }
-
-            window.addEventListener('resize', onWindowResize, false);
-            
-            // Desktop keyboard fallback for testing
-            window.addEventListener('keydown', (e) => {
-                if (e.code === 'Space') {
-                    gameActive = true;
-                    document.getElementById('start-screen').style.display = 'none';
-                    spawnEnemy();
-                }
-            });
-
-            renderer.setAnimationLoop(update);
-        }
-
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        class Ziomeczek {
-            constructor() {
-                this.health = 50;
-                this.isDead = false;
-                this.meshGroup = new THREE.Group();
-
-                const angle = Math.random() * Math.PI * 2;
-                const dist = 8 + Math.random() * 4;
-                const x = Math.cos(angle) * dist;
-                const z = Math.sin(angle) * dist;
-
-                const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8b5cf6, roughness: 0.4 });
-                
-                this.torsoMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.2), bodyMat);
-                this.torsoMesh.position.y = 0.9;
-                this.meshGroup.add(this.torsoMesh);
-
-                const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16), new THREE.MeshStandardMaterial({ color: 0xfde047 }));
-                headMesh.position.y = 1.4;
-                this.meshGroup.add(headMesh);
-
-                const armGeo = new THREE.BoxGeometry(0.15, 0.5, 0.15);
-                this.leftArm = new THREE.Mesh(armGeo, bodyMat);
-                this.leftArm.position.set(-0.3, 0.9, 0);
-                this.meshGroup.add(this.leftArm);
-
-                this.rightArm = new THREE.Mesh(armGeo, bodyMat);
-                this.rightArm.position.set(0.3, 0.9, 0);
-                this.meshGroup.add(this.rightArm);
-
-                this.meshGroup.position.set(x, 0, z);
-                scene.add(this.meshGroup);
-
-                this.body = new CANNON.Body({
-                    mass: 5,
-                    shape: new CANNON.Box(new CANNON.Vec3(0.25, 0.8, 0.25)),
-                    position: new CANNON.Vec3(x, 0.8, z)
-                });
-                this.body.fixedRotation = true;
-                world.add(this.body);
-            }
-
-            update(delta, playerPos) {
-                if (this.isDead) return;
-
-                const pos = this.body.position;
-                const dir = new THREE.Vector3(playerPos.x - pos.x, 0, playerPos.z - pos.z);
-                const dist = dir.length();
-
-                if (dist > 1.2) {
-                    dir.normalize();
-                    const speed = 1.8;
-                    this.body.velocity.x = dir.x * speed;
-                    this.body.velocity.z = dir.z * speed;
-                } else {
-                    this.body.velocity.set(0, 0, 0);
-                    if (Math.random() < 0.02) {
-                        playerHealth -= 10;
-                        updateUI();
-                        if (playerHealth <= 0) gameOver();
-                    }
-                }
-
-                this.meshGroup.position.copy(pos);
-                this.meshGroup.position.y -= 0.8;
-                this.meshGroup.lookAt(playerPos.x, this.meshGroup.position.y, playerPos.z);
-            }
-
-            hit(forceVector, punchSpeed) {
-                if (this.isDead) return;
-                
-                const damage = Math.round(punchSpeed * 40);
-                this.health -= damage;
-
-                this.torsoMesh.material.color.setHex(0xffffff);
-                setTimeout(() => {
-                    if(!this.isDead) this.torsoMesh.material.color.setHex(0x8b5cf6);
-                }, 100);
-
-                if (this.health <= 0) {
-                    this.die(forceVector);
-                }
-            }
-
-            die(forceVector) {
-                this.isDead = true;
-                score += 100;
-                enemiesSpawnedThisWave++;
-                updateUI();
-
-                world.remove(this.body);
-                scene.remove(this.meshGroup);
-
-                spawnRagdoll(this.meshGroup.position, forceVector);
-                checkWaveProgress();
-            }
-        }
-
-        const clock = new THREE.Clock();
-
-        function spawnRagdoll(pos, force) {
-            const ragdollGroup = new THREE.Group();
-            scene.add(ragdollGroup);
-
-            const ragdollBodies = [];
-            const partsData = [
-                { size: [0.2, 0.4, 0.15], pos: [0, 1.2, 0] }, 
-                { size: [0.18, 0.18, 0.18], pos: [0, 1.6, 0] }, 
-                { size: [0.1, 0.4, 0.1], pos: [-0.3, 1.2, 0] }, 
-                { size: [0.1, 0.4, 0.1], pos: [0.3, 1.2, 0] },  
-                { size: [0.12, 0.5, 0.12], pos: [-0.15, 0.5, 0] }, 
-                { size: [0.12, 0.5, 0.12], pos: [0.15, 0.5, 0] }   
-            ];
-
-            const partsMeshes = [];
-
-            partsData.forEach(data => {
-                const mesh = new THREE.Mesh(
-                    new THREE.BoxGeometry(...data.size),
-                    new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.5 })
-                );
-                ragdollGroup.add(mesh);
-                partsMeshes.push(mesh);
-
-                const body = new CANNON.Body({
-                    mass: 2,
-                    shape: new CANNON.Box(new CANNON.Vec3(data.size[0]/2, data.size[1]/2, data.size[2]/2)),
-                    position: new CANNON.Vec3(pos.x + data.pos[0], pos.y + data.pos[1], pos.z + data.pos[2])
-                });
-
-                body.velocity.set(force.x * 5, force.y * 5 + 3, force.z * 5);
-                world.add(body);
-                ragdollBodies.push(body);
-            });
-
-            ragdolls.push({
-                group: ragdollGroup,
-                meshes: partsMeshes,
-                bodies: ragdollBodies,
-                spawnTime: clock.getElapsedTime()
-            });
-        }
 
         function spawnEnemy() {
-            if (enemies.filter(e => !e.isDead).length < 8 && enemiesSpawnedThisWave < enemiesInWave) {
-                enemies.push(new Ziomeczek());
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 6 + Math.random() * 4;
+            const x = Math.cos(angle) * dist;
+            const z = Math.sin(angle) * dist;
+
+            const group = new THREE.Group();
+            group.position.set(x, 0, z);
+
+            const bodyGeo = new THREE.CapsuleGeometry(0.3, 1.1);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd9381e });
+            const mesh = new THREE.Mesh(bodyGeo, bodyMat);
+            mesh.position.y = 0.85;
+            mesh.castShadow = true;
+            group.add(mesh);
+
+            const headGeo = new THREE.SphereGeometry(0.2);
+            const headMat = new THREE.MeshStandardMaterial({ color: 0xffcc99 });
+            const headMesh = new THREE.Mesh(headGeo, headMat);
+            headMesh.position.y = 1.6;
+            group.add(headMesh);
+
+            scene.add(group);
+
+            const enemy = {
+                group: group,
+                hp: 2, // 2 hity i umiera
+                alive: true
+            };
+            enemies.push(enemy);
+        }
+
+        function startNextWave() {
+            for (let i = 0; i < currentWave * 2; i++) {
+                spawnEnemy();
             }
         }
+        startNextWave();
 
-        function checkWaveProgress() {
-            const activeEnemies = enemies.filter(e => !e.isDead).length;
-            if (enemiesSpawnedThisWave >= enemiesInWave && activeEnemies === 0) {
-                currentWave++;
-                enemiesInWave += 3;
-                enemiesSpawnedThisWave = 0;
-                enemies = [];
-                updateUI();
-            }
+        function createRagdoll(position) {
+            const body = new CANNON.Body({
+                mass: 5,
+                shape: new CANNON.Box(new CANNON.Vec3(0.3, 0.85, 0.3)),
+                position: new CANNON.Vec3(position.x, position.y + 0.85, position.z)
+            });
+            body.velocity.set((Math.random() - 0.5) * 4, 3, (Math.random() - 0.5) * 4);
+            world.addBody(body);
+
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.6, 1.7, 0.6),
+                new THREE.MeshStandardMaterial({ color: 0x661111 })
+            );
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            ragdolls.push({
+                mesh: mesh,
+                body: body,
+                spawnTime: Date.now()
+            });
         }
 
-        function updateUI() {
-            document.getElementById('wave-counter').innerText = currentWave;
-            document.getElementById('score-counter').innerText = score;
-            document.getElementById('health-bar').innerText = `${playerHealth} / 100`;
-        }
+        // PĘTLA APLIKACJI
+        const clock = new THREE.Clock();
 
-        function gameOver() {
-            gameActive = false;
-            document.getElementById('start-screen').style.display = 'block';
-            document.querySelector('#start-screen h2').innerText = 'Koniec Gry!';
-            document.querySelector('#start-screen p').innerText = `Twój wynik to ${score} punktów w ${currentWave} fali. Spróbuj ponownie!`;
-        }
-
-        function update() {
+        renderer.setAnimationLoop(() => {
             const delta = clock.getDelta();
+            world.step(1 / 60, delta);
 
-            if (gameActive) {
-                world.step(1 / 60, delta, 3);
+            // Łączenie kuli z kontrolerem
+            const targetPos = new THREE.Vector3();
+            controllerRight.getWorldPosition(targetPos);
+            
+            // Przyciąganie fizycznej kuli do ręki gracza
+            const ballPos = ballBody.position;
+            const dir = new THREE.Vector3().subVectors(targetPos, ballPos);
+            if (dir.length() > 0.4) {
+                ballBody.position.copy(targetPos.clone().add(dir.normalize().multiplyScalar(-0.4)));
+            }
+            ballBody.applyForce(dir.multiplyScalar(40), ballBody.position);
 
-                spawnTimer += delta;
-                if (spawnTimer > 3) {
-                    spawnTimer = 0;
-                    spawnEnemy();
+            ballMesh.position.copy(ballBody.position);
+            ballMesh.quaternion.copy(ballBody.quaternion);
+
+            // Rysowanie linijki/łańcucha
+            const start = targetPos;
+            const end = ballMesh.position;
+            chainMesh.position.copy(start).add(end).multiplyScalar(0.5);
+            chainMesh.scale.set(1, start.distanceTo(end), 1);
+            chainMesh.lookAt(end);
+            chainMesh.rotateX(Math.PI / 2);
+
+            // Ruch ziomeczków w stronę gracza
+            const playerPos = camera.position;
+            enemies.forEach((enemy) => {
+                if (!enemy.alive) return;
+
+                const ePos = enemy.group.position;
+                const distance = ePos.distanceTo(new THREE.Vector3(playerPos.x, 0, playerPos.z));
+
+                if (distance > 0.8) {
+                    const moveDir = new THREE.Vector3().subVectors(playerPos, ePos).normalize();
+                    ePos.x += moveDir.x * delta * 1.2;
+                    ePos.z += moveDir.z * delta * 1.2;
+                    enemy.group.lookAt(playerPos.x, ePos.y, playerPos.z);
                 }
 
-                const playerPos = camera.position;
+                // Kolizja z Thunderballem
+                if (ballMesh.position.distanceTo(enemy.group.position.clone().add(new THREE.Vector3(0, 1, 0))) < 0.6) {
+                    if (!enemy.hitCooldown) {
+                        enemy.hp -= 1;
+                        enemy.hitCooldown = true;
+                        setTimeout(() => enemy.hitCooldown = false, 400);
 
-                for (let i = 0; i < controllers.length; i++) {
-                    const controller = controllers[i];
-                    const currentPos = controller.position.clone();
-                    
-                    const velocity = currentPos.clone().sub(prevControllerPositions[i]).divideScalar(delta);
-                    controllerVelocities[i].copy(velocity);
-                    prevControllerPositions[i].copy(currentPos);
-
-                    const speed = velocity.length();
-                    if (speed > 2.0) {
-                        enemies.forEach(enemy => {
-                            if (!enemy.isDead && enemy.meshGroup.position.distanceTo(currentPos) < 0.6) {
-                                const punchDir = velocity.clone().normalize();
-                                enemy.hit(punchDir, speed);
-                            }
-                        });
+                        if (enemy.hp <= 0) {
+                            enemy.alive = false;
+                            scene.remove(enemy.group);
+                            createRagdoll(enemy.group.position);
+                        }
                     }
                 }
+            });
 
-                enemies.forEach(enemy => enemy.update(delta, playerPos));
+            // Usuwanie martwych wrogów
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                if (!enemies[i].alive) {
+                    enemies.splice(i, 1);
+                }
+            }
 
-                const currentTime = clock.getElapsedTime();
-                for (let i = ragdolls.length - 1; i >= 0; i--) {
-                    const rd = ragdolls[i];
-                    
-                    for (let j = 0; j < rd.bodies.length; j++) {
-                        rd.meshes[j].position.copy(rd.bodies[j].position);
-                        rd.meshes[j].quaternion.copy(rd.bodies[j].quaternion);
-                    }
+            if (enemies.length === 0) {
+                currentWave++;
+                startNextWave();
+            }
 
-                    if (currentTime - rd.spawnTime > 5.0) {
-                        rd.bodies.forEach(b => world.remove(b));
-                        scene.remove(rd.group);
-                        ragdolls.splice(i, 1);
-                    }
+            // Aktualizacja ragdolli i ich usuwanie po 5s
+            const now = Date.now();
+            for (let i = ragdolls.length - 1; i >= 0; i--) {
+                const rd = ragdolls[i];
+                rd.mesh.position.copy(rd.body.position);
+                rd.mesh.quaternion.copy(rd.body.quaternion);
+
+                if (now - rd.spawnTime > 5000) {
+                    scene.remove(rd.mesh);
+                    world.removeBody(rd.body);
+                    ragdolls.splice(i, 1);
                 }
             }
 
             renderer.render(scene, camera);
-        }
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
