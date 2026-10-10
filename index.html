@@ -1,408 +1,854 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>FlopVR — Pub Playground</title>
 <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+<script>
+/* FlopVR — lekki prototyp A-Frame dla Meta Quest 3S.
+   Bez zewnętrznego silnika fizyki, cieni i drugiej pętli animacji. */
+
+const pressedKeys = Object.create(null);
+let desktopHeld = null;
+let hitCount = 0;
+
+function getCamera() {
+  return document.querySelector('#camera');
+}
+
+function getPropList() {
+  return Array.from(document.querySelectorAll('.grabbable'));
+}
+
+function vec3() {
+  return new THREE.Vector3();
+}
+
+const forwardQuaternion = new THREE.Quaternion();
+
+function objectForward(object3D, target) {
+  object3D.getWorldQuaternion(forwardQuaternion);
+  return target.set(0, 0, -1).applyQuaternion(forwardQuaternion).normalize();
+}
+
+/* Powierzchnie, na których mogą zatrzymywać się rekwizyty. */
+function tableSurface(x, z) {
+  if (x > -3.75 && x < -2.25 && z > -4.2 && z < -3.0) return 0.96;
+  if (x > 2.15 && x < 3.75 && z > -4.2 && z < -3.0) return 0.96;
+  if (x > -3.0 && x < 3.0 && z > -7.0 && z < -6.0) return 1.53;
+  return null;
+}
+
+function updateHitCounter() {
+  const el = document.querySelector('#hits');
+  if (el) el.textContent = 'Trafienia w manekin: ' + hitCount;
+}
+
+/* Sterowanie myszką i klawiaturą do testowania bez gogli. */
+function desktopGrab() {
+  if (desktopHeld) return;
+
+  const camera = getCamera();
+  if (!camera) return;
+
+  const origin = camera.object3D.getWorldPosition(vec3());
+  const forward = camera.object3D.getWorldDirection(vec3());
+  const focus = origin.clone().addScaledVector(forward, 1.0);
+
+  let chosen = null;
+  let best = 0.72;
+
+  for (const prop of getPropList()) {
+    if (prop.object3D.userData.heldBy) continue;
+
+    const p = prop.object3D.getWorldPosition(vec3());
+    const distance = p.distanceTo(focus);
+
+    if (distance < best) {
+      best = distance;
+      chosen = prop;
+    }
+  }
+
+  if (chosen) {
+    desktopHeld = chosen;
+    chosen.object3D.userData.heldBy = 'desktop';
+
+    const physics = chosen.components['physics-prop'];
+    if (physics) {
+      physics.active = false;
+      physics.velocity.set(0, 0, 0);
+    }
+  }
+}
+
+function desktopThrow() {
+  if (!desktopHeld) return;
+
+  const prop = desktopHeld;
+  desktopHeld = null;
+  prop.object3D.userData.heldBy = null;
+
+  const camera = getCamera();
+  const forward = camera
+    ? camera.object3D.getWorldDirection(vec3())
+    : new THREE.Vector3(0, 0, -1);
+
+  const physics = prop.components['physics-prop'];
+
+  if (physics) {
+    physics.velocity.copy(forward).multiplyScalar(4.2);
+    physics.velocity.y += 0.8;
+    physics.active = true;
+  }
+}
+
+window.addEventListener('keydown', function (e) {
+  const key = e.key.toLowerCase();
+
+  if ([
+    'w', 'a', 's', 'd',
+    'arrowup', 'arrowdown', 'arrowleft', 'arrowright'
+  ].includes(key)) {
+    pressedKeys[key] = true;
+    e.preventDefault();
+  }
+
+  if (e.repeat) return;
+
+  if (key === 'e') desktopGrab();
+  if (key === 'q') desktopThrow();
+});
+
+window.addEventListener('keyup', function (e) {
+  pressedKeys[e.key.toLowerCase()] = false;
+});
+
+window.addEventListener('blur', function () {
+  Object.keys(pressedKeys).forEach(k => pressedKeys[k] = false);
+});
+
+/* Prosta fizyka pojedynczego rekwizytu. */
+AFRAME.registerComponent('physics-prop', {
+  schema: {
+    radius: { default: 0.13 },
+    bounce: { default: 0.28 }
+  },
+
+  init: function () {
+    this.velocity = new THREE.Vector3();
+    this.active = false;
+    this.position = new THREE.Vector3();
+    this.forward = new THREE.Vector3();
+    this.quaternion = new THREE.Quaternion();
+
+    this.el.object3D.userData.heldBy = null;
+    this.el.object3D.userData.physicsVelocity = this.velocity;
+    this.el.object3D.userData.radius = this.data.radius;
+  },
+
+  tick: function (time, dt) {
+    if (!dt || dt < 0.1) return;
+
+    const step = Math.min(dt / 1000, 0.035);
+    const object = this.el.object3D;
+    const owner = object.userData.heldBy;
+
+    /* Trzymanie przedmiotu przed kamerą na komputerze. */
+    if (owner === 'desktop') {
+      const camera = getCamera();
+      if (!camera) return;
+
+      camera.object3D.getWorldPosition(this.position);
+      camera.object3D.getWorldDirection(this.forward);
+      this.position.addScaledVector(this.forward, 0.72);
+      object.position.copy(this.position);
+      return;
+    }
+
+    /* Trzymanie przedmiotu przy kontrolerze VR. */
+    if (owner && owner.object3D) {
+      owner.object3D.getWorldPosition(this.position);
+      objectForward(owner.object3D, this.forward);
+
+      this.position.addScaledVector(this.forward, 0.12);
+      object.position.copy(this.position);
+
+      owner.object3D.getWorldQuaternion(this.quaternion);
+      object.quaternion.copy(this.quaternion);
+      return;
+    }
+
+    if (!this.active) return;
+
+    const p = object.position;
+    const oldY = p.y;
+
+    this.velocity.y -= 9.81 * step;
+    p.addScaledVector(this.velocity, step);
+
+    /* Odbicie od blatów. */
+    const surface = tableSurface(p.x, p.z);
+
+    if (
+      surface !== null &&
+      oldY >= surface + this.data.radius - 0.06 &&
+      p.y <= surface + this.data.radius &&
+      this.velocity.y <= 0
+    ) {
+      p.y = surface + this.data.radius;
+      this.velocity.y = -this.velocity.y * this.data.bounce;
+      this.velocity.x *= 0.78;
+      this.velocity.z *= 0.78;
+
+      if (Math.abs(this.velocity.y) < 0.35) {
+        this.velocity.y = 0;
+      }
+    }
+
+    /* Podłoga. */
+    if (p.y < this.data.radius) {
+      p.y = this.data.radius;
+
+      if (this.velocity.y < 0) {
+        this.velocity.y = -this.velocity.y * this.data.bounce;
+      }
+
+      this.velocity.x *= 0.78;
+      this.velocity.z *= 0.78;
+
+      if (Math.abs(this.velocity.y) < 0.3) {
+        this.velocity.y = 0;
+      }
+    }
+
+    /* Granice pokoju. */
+    if (p.x < -5.45) {
+      p.x = -5.45;
+      this.velocity.x = Math.abs(this.velocity.x) * 0.35;
+    }
+
+    if (p.x > 5.45) {
+      p.x = 5.45;
+      this.velocity.x = -Math.abs(this.velocity.x) * 0.35;
+    }
+
+    if (p.z < -8.45) {
+      p.z = -8.45;
+      this.velocity.z = Math.abs(this.velocity.z) * 0.35;
+    }
+
+    if (p.z > 2.45) {
+      p.z = 2.45;
+      this.velocity.z = -Math.abs(this.velocity.z) * 0.35;
+    }
+
+    /* Opór powietrza i zatrzymanie leżącego przedmiotu. */
+    this.velocity.multiplyScalar(Math.exp(-0.65 * step));
+
+    if (
+      this.velocity.lengthSq() < 0.018 &&
+      p.y <= this.data.radius + 0.015
+    ) {
+      this.velocity.set(0, 0, 0);
+      this.active = false;
+    } else if (
+      this.velocity.lengthSq() < 0.004 &&
+      surface !== null &&
+      p.y <= surface + this.data.radius + 0.02
+    ) {
+      this.velocity.set(0, 0, 0);
+      this.active = false;
+    }
+  }
+});
+
+/* Chwytanie i rzucanie przez kontrolery Meta Quest. */
+AFRAME.registerComponent('hand-interaction', {
+  init: function () {
+    this.held = null;
+    this.buttons = new Set();
+
+    this.velocity = new THREE.Vector3();
+    this.current = new THREE.Vector3();
+    this.previous = new THREE.Vector3();
+    this.forward = new THREE.Vector3();
+
+    this.lastTime = 0;
+    this.lastHit = 0;
+
+    this.el.addEventListener('triggerdown', () => {
+      this.buttons.add('trigger');
+      this.grab();
+    });
+
+    this.el.addEventListener('gripdown', () => {
+      this.buttons.add('grip');
+      this.grab();
+    });
+
+    this.el.addEventListener('triggerup', () => {
+      this.buttons.delete('trigger');
+      this.releaseIfReady();
+    });
+
+    this.el.addEventListener('gripup', () => {
+      this.buttons.delete('grip');
+      this.releaseIfReady();
+    });
+  },
+
+  grab: function () {
+    if (this.held) return;
+
+    this.el.object3D.getWorldPosition(this.current);
+
+    let chosen = null;
+    let best = 0.48;
+
+    for (const prop of getPropList()) {
+      if (prop.object3D.userData.heldBy) continue;
+
+      const p = prop.object3D.getWorldPosition(vec3());
+      const distance = p.distanceTo(this.current);
+
+      if (distance < best) {
+        best = distance;
+        chosen = prop;
+      }
+    }
+
+    if (!chosen) return;
+
+    this.held = chosen;
+    chosen.object3D.userData.heldBy = this.el;
+
+    const physics = chosen.components['physics-prop'];
+
+    if (physics) {
+      physics.active = false;
+      physics.velocity.set(0, 0, 0);
+    }
+  },
+
+  releaseIfReady: function () {
+    if (this.buttons.size === 0) this.release();
+  },
+
+  release: function () {
+    if (!this.held) return;
+
+    const prop = this.held;
+    this.held = null;
+    prop.object3D.userData.heldBy = null;
+
+    objectForward(this.el.object3D, this.forward);
+
+    const physics = prop.components['physics-prop'];
+
+    if (physics) {
+      /* Prędkość dłoni i impuls do przodu tworzą prosty rzut. */
+      physics.velocity.copy(this.velocity).multiplyScalar(1.15);
+      physics.velocity.addScaledVector(this.forward, 1.8);
+
+      if (physics.velocity.length() > 7.5) {
+        physics.velocity.setLength(7.5);
+      }
+
+      physics.active = true;
+    }
+  },
+
+  tick: function (time, dt) {
+    this.el.object3D.getWorldPosition(this.current);
+
+    if (this.lastTime && dt > 0) {
+      const safeDt = Math.max(dt, 4);
+
+      this.velocity
+        .copy(this.current)
+        .sub(this.previous)
+        .multiplyScalar(1000 / safeDt);
+
+      if (this.velocity.length() > 7) {
+        this.velocity.setLength(7);
+      }
+    } else {
+      this.velocity.set(0, 0, 0);
+    }
+
+    this.previous.copy(this.current);
+    this.lastTime = time;
+  }
+});
+
+/* Płynny ruch: lewy thumbstick oraz WASD na komputerze. */
+AFRAME.registerComponent('player-move', {
+  init: function () {
+    /* Elementy potomne mogą nie być jeszcze gotowe podczas inicjalizacji. */
+    this.camera = null;
+    this.left = null;
+
+    this.axisX = 0;
+    this.axisY = 0;
+
+    this.forward = new THREE.Vector3();
+    this.right = new THREE.Vector3();
+    this.move = new THREE.Vector3();
+  },
+
+  tick: function (time, dt) {
+    /* Pobieraj kontrolery dopiero wtedy, gdy są już dostępne. */
+    if (!this.camera) {
+      this.camera = document.querySelector('#camera');
+    }
+
+    if (!this.left) {
+      this.left = document.querySelector('#leftController');
+
+      if (this.left) {
+        this.left.addEventListener('thumbstickmoved', (event) => {
+          this.axisX = event.detail.x || 0;
+          this.axisY = event.detail.y || 0;
+        });
+      }
+    }
+
+    if (!dt || !this.camera) return;
+
+    const forwardKeys =
+      (pressedKeys.w || pressedKeys.arrowup ? 1 : 0) -
+      (pressedKeys.s || pressedKeys.arrowdown ? 1 : 0);
+
+    const sideKeys =
+      (pressedKeys.d || pressedKeys.arrowright ? 1 : 0) -
+      (pressedKeys.a || pressedKeys.arrowleft ? 1 : 0);
+
+    const f = forwardKeys - this.axisY;
+    const s = sideKeys + this.axisX;
+
+    if (Math.abs(f) < 0.04 && Math.abs(s) < 0.04) return;
+
+    this.camera.object3D.getWorldDirection(this.forward);
+    this.forward.y = 0;
+
+    if (this.forward.lengthSq() < 0.001) {
+      this.forward.set(0, 0, -1);
+    }
+
+    this.forward.normalize();
+    this.right.set(-this.forward.z, 0, this.forward.x).normalize();
+
+    this.move
+      .copy(this.forward)
+      .multiplyScalar(f)
+      .addScaledVector(this.right, s);
+
+    if (this.move.lengthSq() > 1) {
+      this.move.normalize();
+    }
+
+    this.el.object3D.position.addScaledVector(
+      this.move,
+      Math.min(dt / 1000, 0.04) * 2.0
+    );
+
+    this.el.object3D.position.x = THREE.MathUtils.clamp(
+      this.el.object3D.position.x, -5.1, 5.1
+    );
+
+    this.el.object3D.position.z = THREE.MathUtils.clamp(
+      this.el.object3D.position.z, -8.0, 2.0
+    );
+  }
+});
+
+/* Manekin: zachwianie i powrót do pozycji startowej. */
+AFRAME.registerComponent('target-dummy', {
+  init: function () {
+    this.home = null;
+    this.returnAt = 0;
+
+    this.center = new THREE.Vector3();
+    this.direction = new THREE.Vector3();
+  },
+
+  hit: function (origin, power, time) {
+    if (!this.home) {
+      this.home = this.el.object3D.position.clone();
+    }
+
+    this.el.object3D.getWorldPosition(this.center);
+    this.direction.copy(this.center).sub(origin);
+    this.direction.y = 0;
+
+    if (this.direction.lengthSq() < 0.001) {
+      this.direction.set(0, 0, 1);
+    }
+
+    this.direction.normalize();
+
+    this.el.object3D.position.x +=
+      this.direction.x * Math.min(0.18, power * 0.018);
+
+    this.el.object3D.position.z +=
+      this.direction.z * Math.min(0.18, power * 0.018);
+
+    this.el.object3D.rotation.z = THREE.MathUtils.clamp(
+      this.el.object3D.rotation.z +
+      (this.direction.x >= 0 ? -0.65 : 0.65),
+      -1.0, 1.0
+    );
+
+    this.el.object3D.rotation.x = THREE.MathUtils.clamp(
+      this.el.object3D.rotation.x +
+      (this.direction.z >= 0 ? 0.16 : -0.16),
+      -0.35, 0.35
+    );
+
+    this.returnAt = time + 900;
+    hitCount++;
+    updateHitCounter();
+  },
+
+  tick: function (time, dt) {
+    if (!this.home) {
+      this.home = this.el.object3D.position.clone();
+    }
+
+    if (time < this.returnAt) return;
+
+    const rotationBlend = Math.min(1, Math.max(0, dt / 280));
+    const positionBlend = Math.min(1, Math.max(0, dt / 450));
+
+    this.el.object3D.rotation.x +=
+      (0 - this.el.object3D.rotation.x) * rotationBlend;
+
+    this.el.object3D.rotation.z +=
+      (0 - this.el.object3D.rotation.z) * rotationBlend;
+
+    this.el.object3D.position.lerp(this.home, positionBlend);
+  }
+});
+
+/* Lekkie sprawdzanie kontaktu co około 32 ms, bez skanowania DOM w każdej klatce. */
+AFRAME.registerComponent('gameplay-loop', {
+  init: function () {
+    this.ready = false;
+    this.lastCheck = 0;
+  },
+
+  tick: function (time) {
+    if (!this.ready) {
+      this.hands = [
+        document.querySelector('#leftController'),
+        document.querySelector('#rightController')
+      ].filter(Boolean);
+
+      this.props = Array.from(this.el.querySelectorAll('.grabbable'));
+      this.dummy = document.querySelector('#dummy');
+
+      this.parts = this.dummy
+        ? Array.from(this.dummy.querySelectorAll('.target-part'))
+        : [];
+
+      this.ready = true;
+    }
+
+    if (
+      time - this.lastCheck < 32 ||
+      !this.dummy ||
+      !this.dummy.components['target-dummy']
+    ) {
+      return;
+    }
+
+    this.lastCheck = time;
+    const target = this.dummy.components['target-dummy'];
+
+    /* Kontakt pięści z elementami manekina. */
+    for (const hand of this.hands) {
+      const interaction = hand.components['hand-interaction'];
+
+      if (
+        !interaction ||
+        interaction.velocity.length() < 1.35 ||
+        time - interaction.lastHit < 420
+      ) {
+        continue;
+      }
+
+      const hp = hand.object3D.getWorldPosition(vec3());
+      let contacted = false;
+
+      for (const part of this.parts) {
+        if (
+          hp.distanceTo(part.object3D.getWorldPosition(vec3())) < 0.27
+        ) {
+          contacted = true;
+          break;
+        }
+      }
+
+      if (contacted) {
+        interaction.lastHit = time;
+        target.hit(hp, interaction.velocity.length(), time);
+      }
+    }
+
+    /* Piankowy rekwizyt może trafić manekin podczas lotu. */
+    for (const prop of this.props) {
+      const data = prop.object3D.userData;
+      const physics = prop.components['physics-prop'];
+
+      if (
+        !physics ||
+        data.heldBy ||
+        physics.velocity.length() < 1.65 ||
+        time - (data.lastHit || 0) < 650
+      ) {
+        continue;
+      }
+
+      const pp = prop.object3D.getWorldPosition(vec3());
+      let contacted = false;
+
+      for (const part of this.parts) {
+        if (
+          pp.distanceTo(part.object3D.getWorldPosition(vec3())) < 0.34
+        ) {
+          contacted = true;
+          break;
+        }
+      }
+
+      if (contacted) {
+        data.lastHit = time;
+        target.hit(pp, physics.velocity.length(), time);
+        physics.velocity.multiplyScalar(0.18);
+      }
+    }
+  }
+});
+</script>
+
 <style>
-body{margin:0;font-family:Arial;background:#15100d}
-#info{position:fixed;z-index:5;top:12px;left:12px;
-background:#211811dd;color:#ffe1a6;padding:12px;border-radius:10px;
-font-size:14px;pointer-events:none}
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #17100c;
+  font-family: Arial, sans-serif;
+}
+
+#hud {
+  position: fixed;
+  z-index: 10;
+  top: 10px;
+  left: 10px;
+  max-width: 290px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: #ffe0ab;
+  background: rgba(28,18,12,.84);
+  font-size: 13px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+#hits {
+  margin-top: 4px;
+  color: #fff;
+  font-weight: bold;
+}
 </style>
 </head>
+
 <body>
-<div id="info">🍺 FLOPVR — PUB PLAYGROUND<br>
-VR: przycisk VR w rogu<br>
-Desktop: WASD + mysz, E — podnieś, Q — rzuć<br>
-Kontrolery: grip/trigger — chwyt i puszczenie</div>
+<div id="hud">
+  🍺 <b>FLOPVR · PUB PLAYGROUND</b><br>
+  VR: trigger lub grip — chwyt/puszczenie · lewy drążek — ruch<br>
+  PC: WASD/strzałki — ruch · mysz — rozglądanie · E — chwyt · Q — rzut
+  <div id="hits">Trafienia w manekin: 0</div>
+</div>
 
 <a-scene
- renderer="antialias:true; colorManagement:true"
- shadow="type:pcfsoft"
- background="color:#17100c"
- vr-mode-ui="enabled:true"
- webxr="optionalFeatures: local-floor, bounded-floor">
+  renderer="antialias: false; colorManagement: true; foveationLevel: 1; highRefreshRate: false"
+  vr-mode-ui="enabled: true"
+  webxr="optionalFeatures: local-floor"
+  background="color: #17100c"
+  gameplay-loop>
 
- <a-assets>
-  <a-mixin id="wood" material="color:#58351f; roughness:0.85"></a-mixin>
- </a-assets>
+  <!-- Oświetlenie bez cieni, lżejsze dla GPU Questa. -->
+  <a-entity light="type: ambient; intensity: 0.85; color: #ffe1bd"></a-entity>
+  <a-entity light="type: directional; intensity: 1.05; color: #ffd0a0" position="-3 6 2"></a-entity>
 
- <!-- ŚWIATŁO -->
- <a-entity light="type:ambient;intensity:0.8;color:#ffd9aa"></a-entity>
- <a-entity light="type:directional;intensity:1.5;castShadow:true"
-           position="-3 7 4"></a-entity>
- <a-entity light="type:point;color:#ff9b45;intensity:1.2;distance:9"
-           position="0 3 -3"></a-entity>
+  <!-- Pomieszczenie z otwartym wejściem. -->
+  <a-plane position="0 0 -3" rotation="-90 0 0"
+    width="12" height="12" color="#38291f"></a-plane>
 
- <!-- POMIESZCZENIE -->
- <a-box position="0 -0.15 -2" width="12" height=".3"
-        depth="12" color="#38271d"></a-box>
- <a-box position="0 2.5 -8" width="12" height="5"
-        depth=".2" color="#543321"></a-box>
- <a-box position="-6 2.5 -2" width=".2" height="5"
-        depth="12" color="#43291e"></a-box>
- <a-box position="6 2.5 -2" width=".2" height="5"
-        depth="12" color="#43291e"></a-box>
- <a-box position="0 5 -2" width="12" height=".2"
-        depth="12" color="#251b16"></a-box>
+  <a-box position="0 2.5 -9"
+    width="12" height="5" depth="0.2" color="#503323"></a-box>
 
- <!-- LADA -->
- <a-box position="0 1 -5" width="6" height="1.4"
-        depth=".8" color="#59331e"></a-box>
- <a-box position="0 1.73 -5" width="6.2" height=".12"
-        depth="1" color="#a56a37"></a-box>
+  <a-box position="-6 2.5 -3"
+    width="0.2" height="5" depth="12" color="#432a1d"></a-box>
 
- <!-- STOŁY -->
- <a-entity id="furniture"></a-entity>
+  <a-box position="6 2.5 -3"
+    width="0.2" height="5" depth="12" color="#432a1d"></a-box>
 
- <!-- REKWIZYTY DO CHWYTANIA -->
- <a-entity id="props"></a-entity>
+  <a-box position="0 4.95 -3"
+    width="12" height="0.1" depth="12" color="#251a14"></a-box>
 
- <!-- MANEKIN TRENINGOWY -->
- <a-entity id="dummy" position="1.5 0 -3">
-  <a-cylinder id="body" position="0 1.1 0"
-      radius=".3" height=".8" color="#e0b77b"
-      class="dummy-part"></a-cylinder>
-  <a-sphere id="head" position="0 1.75 0"
-      radius=".23" color="#f1d1a3"
-      class="dummy-part"></a-sphere>
-  <a-box id="armL" position="-.43 1.15 0"
-      width=".18" height=".65" depth=".2"
-      rotation="0 0 -20" color="#e0b77b"
-      class="dummy-part"></a-box>
-  <a-box id="armR" position=".43 1.15 0"
-      width=".18" height=".65" depth=".2"
-      rotation="0 0 20" color="#e0b77b"
-      class="dummy-part"></a-box>
-  <a-cylinder id="legL" position="-.16 .45 0"
-      radius=".12" height=".65" color="#405c80"
-      class="dummy-part"></a-cylinder>
-  <a-cylinder id="legR" position=".16 .45 0"
-      radius=".12" height=".65" color="#405c80"
-      class="dummy-part"></a-cylinder>
- </a-entity>
+  <!-- Lada barowa. -->
+  <a-box position="0 0.68 -6.5"
+    width="5.8" height="1.36" depth="0.8" color="#5b351f"></a-box>
 
- <!-- GRACZ -->
- <a-entity id="rig" position="0 0 0">
-  <a-camera id="camera" position="0 1.65 0"
-    look-controls="pointerLockEnabled:false">
-   <a-cursor color="#ffd28a" raycaster="objects:.grabbable"></a-cursor>
-  </a-camera>
+  <a-box position="0 1.43 -6.5"
+    width="6.0" height="0.12" depth="0.95" color="#a36c3b"></a-box>
 
-  <!-- Dłonie podążają za kontrolerami -->
-  <a-entity id="leftHand" hand-controller="hand:left"
-     geometry="primitive:sphere;radius:.09"
-     material="color:#e0a878;roughness:.7"
-     tracked-controls="hand:left;space:gripSpace"></a-entity>
+  <a-box position="0 2.15 -8.82"
+    width="3.4" height="0.55" depth="0.08" color="#2a1b13"></a-box>
 
-  <a-entity id="rightHand" hand-controller="hand:right"
-     geometry="primitive:sphere;radius:.09"
-     material="color:#e0a878;roughness:.7"
-     tracked-controls="hand:right;space:gripSpace"></a-entity>
- </a-entity>
+  <a-box position="0 2.15 -8.75"
+    width="2.2" height="0.035" depth="0.025" color="#f4c27e"></a-box>
 
- <a-sky color="#17100c"></a-sky>
-</a-scene>
+  <!-- Stoły. -->
+  <a-box position="-3 0.9 -3.6"
+    width="1.5" height="0.12" depth="1.1" color="#80502c"></a-box>
 
-<script>
-const scene = document.querySelector('a-scene');
-const props = document.querySelector('#props');
-const furniture = document.querySelector('#furniture');
-const rig = document.querySelector('#rig');
-const camera = document.querySelector('#camera');
-const dummy = document.querySelector('#dummy');
+  <a-box position="-3.58 0.43 -3.98"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-const vec = (x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
+  <a-box position="-2.42 0.43 -3.98"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-/* Meble */
-function box(parent,pos,size,color){
- const e=document.createElement('a-box');
- e.setAttribute('position',pos.join(' '));
- e.setAttribute('width',size[0]);
- e.setAttribute('height',size[1]);
- e.setAttribute('depth',size[2]);
- e.setAttribute('color',color);
- parent.appendChild(e);
- return e;
-}
-function table(x,z){
- box(furniture,[x,.85,z],[1.5,.12,1.1],'#80502c');
- for(const dx of [-.6,.6])for(const dz of [-.4,.4])
-  box(furniture,[x+dx,.42,z+dz],[.1,.8,.1],'#4b2d1c');
-}
-function chair(x,z){
- box(furniture,[x,.55,z],[.55,.12,.55],'#a66b3d');
- box(furniture,[x,.95,z-.23],[.55,.8,.1],'#80502c');
- for(const dx of [-.2,.2])for(const dz of [-.2,.2])
-  box(furniture,[x+dx,.27,z+dz],[.07,.5,.07],'#59351f');
-}
-table(-2,-2.5); table(2,-2.5);
-chair(-2.7,-2.1); chair(-1.3,-2.1);
-chair(1.3,-2.1); chair(2.7,-2.1);
+  <a-box position="-3.58 0.43 -3.22"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-/* Rekwizyty piankowe — lekkie, kreskówkowe */
-function makeProp(type,x,y,z,color){
- let e=document.createElement(type==='ball'?'a-sphere':'a-cylinder');
- e.classList.add('grabbable');
- e.dataset.kind=type;
- e.dataset.held='';
- e.dataset.vx='0'; e.dataset.vy='0'; e.dataset.vz='0';
- e.setAttribute('position',`${x} ${y} ${z}`);
- e.setAttribute('color',color);
- if(type==='ball'){
-  e.setAttribute('radius','.14');
- }else{
-  e.setAttribute('radius','.09');
-  e.setAttribute('height',type==='foam'?'.35':'.24');
- }
- e.setAttribute('material','roughness:.55');
- e.object3D.userData.velocity=vec();
- e.object3D.userData.heldBy=null;
- props.appendChild(e);
- return e;
-}
-makeProp('foam',-.9,1,-4,'#ffb347');
-makeProp('foam',.5,1,-4,'#ff7c8a');
-makeProp('ball',1.3,1,-3.5,'#69c9ff');
-makeProp('foam',-2,1,-2.5,'#b5ec82');
+  <a-box position="-2.42 0.43 -3.22"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-/* Kontrolery i chwytanie */
-AFRAME.registerComponent('hand-controller',{
- schema:{hand:{default:'right'}},
- init(){
-  this.held=null;
-  this.prevButtons={};
-  this.velocity=vec();
-  this.lastPos=vec();
-  this.ready=false;
-  this.el.addEventListener('buttondown',e=>this.button(e,true));
-  this.el.addEventListener('buttonup',e=>this.button(e,false));
- },
- button(e,down){
-  const b=e.detail && e.detail.id;
-  if(b==='trigger'||b==='grip'||b===0||b===1){
-   if(down)this.grab();
-   else this.release();
-  }
- },
- grab(){
-  if(this.held)return;
-  const hand=this.el.object3D.getWorldPosition(vec());
-  let best=null,dist=.65;
-  document.querySelectorAll('.grabbable').forEach(o=>{
-   if(o.object3D.userData.heldBy)return;
-   const p=o.object3D.getWorldPosition(vec());
-   const d=p.distanceTo(hand);
-   if(d<dist){dist=d;best=o;}
-  });
-  if(best){
-   this.held=best;
-   best.object3D.userData.heldBy=this.el;
-  }
- },
- release(){
-  if(!this.held)return;
-  const p=this.held.object3D.getWorldPosition(vec());
-  const old=this.held;
-  old.object3D.userData.heldBy=null;
-  old.object3D.userData.velocity.copy(this.velocity).multiplyScalar(1.8);
-  this.held=null;
- },
- tick(t,dt){
-  const p=this.el.object3D.getWorldPosition(vec());
-  if(this.ready && dt>0){
-   this.velocity.copy(p).sub(this.lastPos).multiplyScalar(1000/dt);
-   if(this.velocity.length()>12)this.velocity.setLength(12);
-  }
-  this.lastPos.copy(p);
-  this.ready=true;
+  <a-box position="2.95 0.9 -3.6"
+    width="1.5" height="0.12" depth="1.1" color="#80502c"></a-box>
 
-  const xr=scene.renderer && scene.renderer.xr;
-  const session=xr&&xr.getSession();
-  if(session){
-   const source=[...session.inputSources].find(s=>
-    s.handedness===this.data.hand&&s.gamepad);
-   if(source){
-    const gp=source.gamepad;
-    // Trigger i grip: najczęściej przyciski 0 i 1.
-    const pressed=(gp.buttons[0]?.pressed)||(gp.buttons[1]?.pressed);
-    if(pressed&&!this.prevButtons.grab)this.grab();
-    if(!pressed&&this.prevButtons.grab)this.release();
-    this.prevButtons.grab=pressed;
+  <a-box position="2.37 0.43 -3.98"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-    // Płynny ruch gałką analogową.
-    if(this.data.hand==='left'){
-     const axes=gp.axes;
-     if(axes.length>=2){
-      movement.x=axes[2]??axes[0]??0;
-      movement.z=axes[3]??axes[1]??0;
-     }
-    }
-   }
-  }
+  <a-box position="3.53 0.43 -3.98"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-  if(this.held){
-   const target=p.clone();
-   target.add(vec(0,0,-.12));
-   this.held.object3D.position.copy(
-    this.held.parentEl.object3D.worldToLocal(target)
-   );
-   this.held.object3D.userData.velocity.set(0,0,0);
-  }
- }
-});
-let movement={x:0,z:0};
-let desktopKeys={};
-window.addEventListener('keydown',e=>desktopKeys[e.key.toLowerCase()]=true);
-window.addEventListener('keyup',e=>desktopKeys[e.key.toLowerCase()]=false);
-window.addEventListener('keydown',e=>{
- if(e.key.toLowerCase()==='e')tryGrabDesktop();
- if(e.key.toLowerCase()==='q')releaseDesktop();
-});
-let desktopHeld=null;
-function tryGrabDesktop(){
- const hand=camera.object3D.getWorldPosition(vec());
- const dir=vec();
- camera.object3D.getWorldDirection(dir);
- const target=hand.add(dir.multiplyScalar(.8));
- let best=null,dist=.6;
- document.querySelectorAll('.grabbable').forEach(o=>{
-  if(o.object3D.userData.heldBy)return;
-  const p=o.object3D.getWorldPosition(vec());
-  const d=p.distanceTo(target);
-  if(d<dist){dist=d;best=o;}
- });
- if(best){desktopHeld=best;best.object3D.userData.heldBy='desktop';}
-}
-function releaseDesktop(){
- if(!desktopHeld)return;
- const dir=vec();
- camera.object3D.getWorldDirection(dir);
- desktopHeld.object3D.userData.heldBy=null;
- desktopHeld.object3D.userData.velocity.copy(dir.multiplyScalar(6));
- desktopHeld=null;
-}
+  <a-box position="2.37 0.43 -3.22"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-/* Prosta fizyka obiektów */
-const gravity=9.81;
-function physics(dt){
- const delta=Math.min(dt/1000,.035);
- document.querySelectorAll('.grabbable').forEach(o=>{
-  const data=o.object3D.userData;
-  if(data.heldBy==='desktop'){
-   const p=camera.object3D.getWorldPosition(vec());
-   const d=vec();camera.object3D.getWorldDirection(d);
-   p.add(d.multiplyScalar(.65));
-   o.object3D.position.copy(o.parentEl.object3D.worldToLocal(p));
-   return;
-  }
-  if(data.heldBy)return;
-  const v=data.velocity;
-  if(v.lengthSq()<.0001)return;
-  const p=o.object3D.position;
-  v.y-=gravity*delta;
-  p.addScaledVector(v,delta);
-  if(p.y<.15){p.y=.15;v.y=Math.abs(v.y)*.35;v.x*=.8;v.z*=.8;}
-  if(Math.abs(p.x)>5.5||Math.abs(p.z)>7){
-   v.x*=-.5;v.z*=-.5;
-  }
-  v.multiplyScalar(Math.pow(.985,delta*60));
- });
-}
+  <a-box position="3.53 0.43 -3.22"
+    width="0.1" height="0.86" depth="0.1" color="#4b2d1c"></a-box>
 
-/* Manekin: kreskówkowe zachwianie i przewrócenie */
-let dummyFall=0;
-let dummyVelocity=vec();
-function resetDummy(){
- dummy.object3D.position.set(1.5,0,-3);
- dummy.object3D.rotation.set(0,0,0);
- dummyFall=0;dummyVelocity.set(0,0,0);
-}
-function knockback(point,force){
- const center=dummy.object3D.getWorldPosition(vec());
- const dir=center.sub(point);
- dir.y=.4;
- if(dir.lengthSq()<.001)dir.set(0,0,1);
- dir.normalize();
- dummyVelocity.addScaledVector(dir,force);
- dummyFall=1;
-}
-function checkHits(){
- const parts=document.querySelectorAll('.dummy-part');
- const hands=[document.querySelector('#leftHand'),document.querySelector('#rightHand')];
- hands.forEach(h=>{
-  if(!h.object3D.visible)return;
-  const hp=h.object3D.getWorldPosition(vec());
-  parts.forEach(part=>{
-   const pp=part.object3D.getWorldPosition(vec());
-   if(hp.distanceTo(pp)<.23){
-    const speed=h.object3D.userData.lastHit||0;
-    if(speed<performance.now()-450){
-     h.object3D.userData.lastHit=performance.now();
-     knockback(hp,2.2);
-    }
-   }
-  });
- });
- document.querySelectorAll('.grabbable').forEach(o=>{
-  const p=o.object3D.getWorldPosition(vec());
-  const d=dummy.object3D.getWorldPosition(vec());
-  if(p.distanceTo(d)<.65&&o.object3D.userData.velocity.length()>2){
-   knockback(p,1.2);
-   o.object3D.userData.velocity.multiplyScalar(.25);
-  }
- });
-}
-function updateDummy(dt){
- const s=Math.min(dt/1000,.03);
- if(dummyFall>0){
-  dummyVelocity.y-=gravity*s;
-  dummy.object3D.position.addScaledVector(dummyVelocity,s);
-  dummy.object3D.rotation.z+=dummyVelocity.x*s*.6;
-  dummy.object3D.rotation.x+=dummyVelocity.z*s*.6;
-  dummyVelocity.multiplyScalar(.96);
-  if(dummy.object3D.position.y<-.35){
-   dummy.object3D.position.y=-.35;
-   dummyVelocity.set(0,0,0);
-   dummyFall=0;
-   setTimeout(resetDummy,1800);
-  }
- }
-}
+  <!-- Krzesła. -->
+  <a-box position="-4 0.52 -2.6"
+    width="0.6" height="0.12" depth="0.55" color="#96613a"></a-box>
 
-/* Ruch desktop i VR */
-function locomotion(dt){
- const s=Math.min(dt/1000,.04);
- const cam=camera.object3D;
- const forward=vec();
- cam.getWorldDirection(forward);
- forward.y=0;forward.normalize();
- const right=vec().crossVectors(forward,vec(0,1,0)).normalize();
- let x=0,z=0;
- if(desktopKeys.w)z-=1;
- if(desktopKeys.s)z+=1;
- if(desktopKeys.a)x-=1;
- if(desktopKeys.d)x+=1;
- x+=movement.x;
- z+=movement.z;
- const dir=right.multiplyScalar(x).addScaledVector(forward,-z);
- if(dir.lengthSq()>1)dir.normalize();
- rig.object3D.position.addScaledVector(dir,2.2*s);
- rig.object3D.position.x=clamp(rig.object3D.position.x,-5.3,5.3);
- rig.object3D.position.z=clamp(rig.object3D.position.z,-7,3.5);
-}
-let previous=performance.now();
-function frame(now){
- const dt=now-previous;previous=now;
- physics(dt);checkHits();updateDummy(dt);locomotion(dt);
- requestAnimationFrame(frame);
-}
-scene.addEventListener('loaded',()=>requestAnimationFrame(frame));
-</script>
+  <a-box position="-4 0.95 -2.84"
+    width="0.6" height="0.72" depth="0.1" color="#80502c"></a-box>
+
+  <a-box position="4 0.52 -2.6"
+    width="0.6" height="0.12" depth="0.55" color="#96613a"></a-box>
+
+  <a-box position="4 0.95 -2.84"
+    width="0.6" height="0.72" depth="0.1" color="#80502c"></a-box>
+
+  <!-- Lekkie rekwizyty do podnoszenia i rzucania. -->
+  <a-cylinder class="grabbable"
+    physics-prop="radius: 0.12; bounce: 0.25"
+    position="-2.8 1.10 -3.6"
+    radius="0.11" height="0.28" color="#f5b544"
+    material="roughness: 0.9"></a-cylinder>
+
+  <a-cylinder class="grabbable"
+    physics-prop="radius: 0.12; bounce: 0.25"
+    position="2.8 1.10 -3.6"
+    radius="0.11" height="0.28" color="#70c9ef"
+    material="roughness: 0.9"></a-cylinder>
+
+  <a-sphere class="grabbable"
+    physics-prop="radius: 0.15; bounce: 0.32"
+    position="0.55 1.69 -6.45"
+    radius="0.15" color="#f47b8b"
+    material="roughness: 0.85"></a-sphere>
+
+  <a-cylinder class="grabbable"
+    physics-prop="radius: 0.13; bounce: 0.25"
+    position="-0.55 1.66 -6.4"
+    radius="0.12" height="0.25" color="#95d878"
+    material="roughness: 0.9"></a-cylinder>
+
+  <a-sphere class="grabbable"
+    physics-prop="radius: 0.14; bounce: 0.32"
+    position="1.55 1.10 -3.55"
+    radius="0.14" color="#c2a0fa"
+    material="roughness: 0.85"></a-sphere>
+
+  <!-- Manekin treningowy z ruchomymi częściami. -->
+  <a-entity id="dummy" target-dummy position="0 0 -4.45">
+    <a-box class="target-part"
+      position="0 1.15 0" width="0.48" height="0.72" depth="0.28"
+      color="#e3b982"></a-box>
+
+    <a-sphere class="target-part"
+      position="0 1.72 0" radius="0.22" color="#f1d1a3"></a-sphere>
+
+    <a-cylinder class="target-part"
+      position="-0.39 1.15 0" radius="0.09" height="0.62"
+      rotation="0 0 20" color="#e3b982"></a-cylinder>
+
+    <a-cylinder class="target-part"
+      position="0.39 1.15 0" radius="0.09" height="0.62"
+      rotation="0 0 -20" color="#e3b982"></a-cylinder>
+
+    <a-box class="target-part"
+      position="-0.15 0.48 0" width="0.15" height="0.62" depth="0.18"
+      color="#49698c"></a-box>
+
+    <a-box class="target-part"
+      position="0.15 0.48 0" width="0.15" height="0.62" depth="0.18"
+      color="#49698c"></a-box>
+  </a-entity>
+
+  <!-- Gracz i dwa kontrolery Meta Touch. -->
+  <a-entity id="rig" position="0 0 0.8" player-move>
+    <a-camera id="camera"
+      position="0 1.6 0"
+      look-controls="pointerLockEnabled: false"></a-camera>
+
+    <a-entity id="leftController"
+      meta-touch-controls="hand: left; model: false"
+      hand-interaction>
+
+      <a-sphere position="0 0 -0.04"
+        radius="0.075" color="#d6a47e"
+        material="roughness: 0.9"></a-sphere>
+
+      <a-sphere position="0 0.025 -0.105"
+        radius="0.045" color="#e7bc98"
+        material="roughness: 0.9"></a-sphere>
+    </a-entity>
+
+    <a-entity id="rightController"
+      meta-touch-controls="hand: right; model: false"
+      hand-interaction>
+
+      <a-sphere position="0 0 -0.04"
+        radius="0.075" color="#d6a47e"
+        material="roughness: 0.9"></a-sphere>
+
+      <a-sphere position="0 0.025 -0.105"
+        radius="0.045" color="#e7bc98"
+        material="roughness: 0.9"></a-sphere>
+    </a-entity>
+  </a-entity>
+
+  <a-sky color="#17100c"></a-sky>
 </a-scene>
 </body>
 </html>
