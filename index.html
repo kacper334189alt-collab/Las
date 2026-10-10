@@ -3,443 +3,570 @@
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Thunderball VR</title>
+
 <style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070c;color:white;font-family:Arial,sans-serif}
-#ui{position:fixed;top:12px;left:12px;padding:14px;background:#080c12dd;border:1px solid #00ffcc;border-radius:10px;z-index:5;pointer-events:none}
-h2{color:#00ffcc;margin:0 0 8px}
-p{margin:5px 0;font-size:14px}
-#help{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);text-align:center;background:#080c12cc;padding:10px;border-radius:8px;width:max-content;max-width:90%;z-index:5}
+html, body {
+  margin: 0;
+  overflow: hidden;
+  background: #10151b;
+  font-family: Arial, sans-serif;
+}
+#info {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  padding: 12px 15px;
+  color: white;
+  background: #15191dcc;
+  border: 1px solid #a96b32;
+  border-radius: 10px;
+  line-height: 1.6;
+  z-index: 2;
+  user-select: none;
+}
+#crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  color: white;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
 </style>
+
 <script type="importmap">
 {
- "imports":{
-  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
-  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/",
-  "cannon-es":"https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
- }
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
 }
 </script>
 </head>
+
 <body>
-<div id="ui">
-<h2>THUNDERBALL</h2>
-<p>HP: <b id="hp">100</b></p>
-<p>Wrogowie: <b id="enemies">0</b></p>
-<p>Łańcuch: <b>30 segmentów</b></p>
-<p id="mode">Tryb: ekran</p>
+<div id="info">
+  <b>THUNDERBALL VR</b><br>
+  WASD — chodzenie<br>
+  Mysz — rozglądanie się<br>
+  LPM / SPACJA — rzut kulą<br>
+  VR: prawy trigger — rzut<br>
+  VR: lewy joystick — ruch<br>
+  <span id="status">Tryb desktopowy</span>
 </div>
-<div id="help">VR: lewy drążek — chodzenie, prawy kontroler — broń. Na ekranie: WASD + mysz.</div>
+<div id="crosshair">+</div>
 
 <script type="module">
 import * as THREE from 'three';
-import {VRButton} from 'three/addons/webxr/VRButton.js';
-import * as CANNON from 'cannon-es';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
 
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x070a12);
-scene.fog=new THREE.Fog(0x070a12,15,65);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87a8b8);
+scene.fog = new THREE.Fog(0x87a8b8, 18, 75);
 
-const camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.05,200);
-camera.position.set(0,1.65,5);
+const camera = new THREE.PerspectiveCamera(
+  75, innerWidth / innerHeight, 0.05, 150
+);
+camera.position.set(0, 1.7, 5);
 
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
-renderer.xr.enabled=true;
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance'
+});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
-renderer.shadowMap.enabled=true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
-scene.add(new THREE.HemisphereLight(0xbad8ff,0x242033,2));
-const sun=new THREE.DirectionalLight(0xffffff,2.5);
-sun.position.set(5,12,5);
-sun.castShadow=true;
+const status = document.getElementById('status');
+
+scene.add(new THREE.HemisphereLight(0xdcecff, 0x51402c, 2));
+
+const sun = new THREE.DirectionalLight(0xffe1b3, 2.2);
+sun.position.set(-6, 12, 7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
 scene.add(sun);
 
-const floor=new THREE.Mesh(
-new THREE.PlaneGeometry(100,100),
-new THREE.MeshStandardMaterial({color:0x171923,roughness:.85})
+// Materiały
+const metal = new THREE.MeshStandardMaterial({
+  color: 0x373b40, metalness: 0.85, roughness: 0.27
+});
+const bronze = new THREE.MeshStandardMaterial({
+  color: 0xa7662c, metalness: 0.75, roughness: 0.3
+});
+const rubber = new THREE.MeshStandardMaterial({
+  color: 0x17191c, roughness: 0.85
+});
+const ballMat = new THREE.MeshStandardMaterial({
+  color: 0x252a30, metalness: 0.9, roughness: 0.22
+});
+const chainMat = new THREE.MeshStandardMaterial({
+  color: 0xc18a4d, metalness: 0.85, roughness: 0.25
+});
+
+// Podłoże
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(100, 100),
+  new THREE.MeshStandardMaterial({ color: 0x65765b, roughness: 1 })
 );
-floor.rotation.x=-Math.PI/2;
-floor.receiveShadow=true;
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
 scene.add(floor);
 
-const grid=new THREE.GridHelper(100,100,0x00aa99,0x282c38);
-grid.position.y=.01;
+// Siatka na ziemi
+const grid = new THREE.GridHelper(100, 100, 0x52634a, 0x52634a);
+grid.position.y = 0.012;
 scene.add(grid);
 
-for(let i=0;i<20;i++){
-const a=i*Math.PI*2/20;
-const pillar=new THREE.Mesh(
-new THREE.BoxGeometry(.5,3,.5),
-new THREE.MeshStandardMaterial({color:0x222735,metalness:.5,roughness:.5})
-);
-pillar.position.set(Math.cos(a)*12,1.5,Math.sin(a)*12);
-pillar.castShadow=true;
-scene.add(pillar);
+// Otoczenie
+for (let i = 0; i < 35; i++) {
+  const x = (Math.random() - 0.5) * 45;
+  const z = -Math.random() * 40 - 4;
+  const height = 1.5 + Math.random() * 3;
+
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.22, height, 7),
+    new THREE.MeshStandardMaterial({ color: 0x57402c })
+  );
+  trunk.position.set(x, height / 2, z);
+  trunk.castShadow = true;
+  scene.add(trunk);
+
+  const leaves = new THREE.Mesh(
+    new THREE.ConeGeometry(1.1 + Math.random(), 2.7, 7),
+    new THREE.MeshStandardMaterial({ color: 0x345b39 })
+  );
+  leaves.position.set(x, height + 1, z);
+  leaves.castShadow = true;
+  scene.add(leaves);
 }
 
-const world=new CANNON.World();
-world.gravity.set(0,-9.82,0);
-world.solver.iterations=10;
-world.allowSleep=false;
+// Konstrukcja broni
+function createWeapon() {
+  const group = new THREE.Group();
 
-const floorBody=new CANNON.Body({mass:0,shape:new CANNON.Plane()});
-floorBody.quaternion.setFromEuler(-Math.PI/2,0,0);
-world.addBody(floorBody);
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.055, 0.07, 0.34, 10),
+    rubber
+  );
+  handle.rotation.x = Math.PI / 2;
+  handle.position.set(0, 0, -0.12);
+  handle.castShadow = true;
+  group.add(handle);
 
-// Gracz
-const player=new THREE.Group();
-player.position.set(0,0,5);
-scene.add(player);
-player.add(camera);
-camera.position.set(0,1.65,0);
+  const guard = new THREE.Mesh(
+    new THREE.TorusGeometry(0.105, 0.022, 8, 16),
+    bronze
+  );
+  guard.position.set(0, 0, -0.28);
+  group.add(guard);
 
-let yaw=0,pitch=0;
-const keys={};
-let mouseLocked=false;
-let hp=100;
-let gameEnded=false;
-let lastDamage=0;
+  const connector = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.045, 0.12, 10),
+    metal
+  );
+  connector.rotation.x = Math.PI / 2;
+  connector.position.set(0, 0, -0.34);
+  group.add(connector);
 
-addEventListener('keydown',e=>{keys[e.code]=true;});
-addEventListener('keyup',e=>{keys[e.code]=false;});
-renderer.domElement.addEventListener('click',()=>{
-if(!renderer.xr.isPresenting)renderer.domElement.requestPointerLock?.();
-});
-addEventListener('pointerlockchange',()=>mouseLocked=document.pointerLockElement===renderer.domElement);
-addEventListener('mousemove',e=>{
-if(mouseLocked&&!renderer.xr.isPresenting){
-yaw-=e.movementX*.002;
-pitch-=e.movementY*.002;
-pitch=Math.max(-1.4,Math.min(1.4,pitch));
-camera.rotation.order='YXZ';
-camera.rotation.set(pitch,yaw,0);
+  const cap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.065, 12, 10),
+    bronze
+  );
+  cap.position.set(0, 0, -0.4);
+  group.add(cap);
+
+  return group;
 }
-});
 
-// Kontrolery VR
-const leftController=renderer.xr.getController(0);
-const rightController=renderer.xr.getController(1);
-scene.add(leftController,rightController);
+// Prawdziwa broń i broń do trybu desktopowego
+const vrWeapon = createWeapon();
+const desktopWeapon = createWeapon();
 
-const leftGrip=renderer.xr.getControllerGrip(0);
-const rightGrip=renderer.xr.getControllerGrip(1);
-scene.add(leftGrip,rightGrip);
+vrWeapon.position.set(0.10, -0.08, -0.22);
+vrWeapon.rotation.set(-0.18, 0.12, -0.25);
 
-function makeGrip(){
-const g=new THREE.Group();
-const handle=new THREE.Mesh(
-new THREE.CylinderGeometry(.025,.035,.22,10),
-new THREE.MeshStandardMaterial({color:0x292d35,metalness:.8,roughness:.25})
+desktopWeapon.position.set(0.32, -0.27, -0.65);
+desktopWeapon.rotation.set(0.15, -0.15, -0.25);
+camera.add(desktopWeapon);
+scene.add(camera);
+
+// Kula
+const ball = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(0.16, 2),
+  ballMat
 );
-g.add(handle);
-const pommel=new THREE.Mesh(
-new THREE.SphereGeometry(.055,12,12),
-new THREE.MeshStandardMaterial({color:0x00ccaa,metalness:.6,roughness:.3})
-);
-pommel.position.y=-.12;
-g.add(pommel);
-return g;
-}
-rightGrip.add(makeGrip());
-
-const ballRadius=.13;
-const ball=new THREE.Mesh(
-new THREE.SphereGeometry(ballRadius,24,24),
-new THREE.MeshStandardMaterial({color:0x15171c,metalness:.9,roughness:.22})
-);
-ball.castShadow=true;
+ball.castShadow = true;
 scene.add(ball);
 
-const emblem=new THREE.Mesh(
-new THREE.CircleGeometry(.045,20),
-new THREE.MeshBasicMaterial({color:0x00ffcc,side:THREE.DoubleSide})
-);
-emblem.position.z=ballRadius-.002;
-ball.add(emblem);
+// Metalowe kolce kuli
+for (let i = 0; i < 8; i++) {
+  const spike = new THREE.Mesh(
+    new THREE.ConeGeometry(0.045, 0.19, 6),
+    bronze
+  );
+  const direction = new THREE.Vector3(
+    Math.sin(i * Math.PI / 4),
+    Math.cos(i * Math.PI / 4),
+    (i % 2 ? 0.7 : -0.7)
+  ).normalize();
 
-// 30 fizycznych segmentów łańcucha
-const SEGMENTS=30;
-const links=[];
-const linkGeo=new THREE.CapsuleGeometry(.025,.07,3,6);
-const linkMat=new THREE.MeshStandardMaterial({color:0x9299a5,metalness:.9,roughness:.25});
-
-for(let i=0;i<SEGMENTS;i++){
-const mesh=new THREE.Mesh(linkGeo,linkMat);
-mesh.castShadow=true;
-scene.add(mesh);
-links.push(mesh);
-}
-
-// Wirtualne punkty symulujące elastyczny łańcuch
-const points=[];
-const oldPoints=[];
-for(let i=0;i<=SEGMENTS;i++){
-points.push(new THREE.Vector3());
-oldPoints.push(new THREE.Vector3());
-}
-let chainReady=false;
-
-const handWorld=new THREE.Vector3();
-const prevHandWorld=new THREE.Vector3();
-const handVelocity=new THREE.Vector3();
-const tmp=new THREE.Vector3();
-const tmp2=new THREE.Vector3();
-const DOWN=new THREE.Vector3(0,-1,0);
-
-function getHandPosition(){
-if(renderer.xr.isPresenting){
-rightGrip.updateWorldMatrix(true,false);
-rightGrip.getWorldPosition(handWorld);
-if(!handWorld.toArray().every(Number.isFinite))handWorld.set(0,1.3,0);
-}else{
-const dir=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-handWorld.copy(camera.position).add(dir.multiplyScalar(.45));
-handWorld.add(new THREE.Vector3(.25,-.25,0).applyQuaternion(camera.quaternion));
-}
+  spike.position.copy(direction.clone().multiplyScalar(0.14));
+  spike.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0), direction
+  );
+  ball.add(spike);
 }
 
-function resetChain(){
-for(let i=0;i<=SEGMENTS;i++){
-const t=i/SEGMENTS;
-points[i].lerpVectors(handWorld,ball.position,t);
-oldPoints[i].copy(points[i]);
-}
-chainReady=true;
-}
-
-function simulateChain(dt){
-if(!chainReady)resetChain();
-
-// Ostatni punkt jest przyczepiony do bili.
-points[SEGMENTS].copy(ball.position);
-
-// Początek łańcucha jest przy prawej ręce.
-points[0].copy(handWorld);
-
-const gravity=new THREE.Vector3(0,-9.81,0);
-const subDt=Math.min(dt,1/30);
-for(let i=1;i<SEGMENTS;i++){
-const p=points[i];
-const old=oldPoints[i].clone();
-const velocity=p.clone().sub(old).multiplyScalar(.985);
-oldPoints[i].copy(p);
-p.add(velocity);
-p.addScaledVector(gravity,subDt*subDt);
+// DOKŁADNIE CZTERY ogniwa łańcucha
+const links = [];
+for (let i = 0; i < 4; i++) {
+  const link = new THREE.Mesh(
+    new THREE.TorusGeometry(0.032, 0.009, 6, 12),
+    chainMat
+  );
+  link.castShadow = true;
+  scene.add(link);
+  links.push(link);
 }
 
-// Kilka przebiegów ograniczających długość segmentów
-const spacing=points[0].distanceTo(points[SEGMENTS])/SEGMENTS;
-const restLength=Math.max(.055,spacing);
-for(let pass=0;pass<5;pass++){
-points[0].copy(handWorld);
-points[SEGMENTS].copy(ball.position);
-for(let i=0;i<SEGMENTS;i++){
-const a=points[i],b=points[i+1];
-const delta=b.clone().sub(a);
-const len=delta.length();
-if(len<.0001)continue;
-const correction=delta.multiplyScalar((len-restLength)/len);
-if(i!==0)a.addScaledVector(correction,.5);
-if(i+1!==SEGMENTS)b.addScaledVector(correction,-.5);
-}
+// Kontrolery VR
+const controllers = [];
+const grips = [];
+
+for (let i = 0; i < 2; i++) {
+  const controller = renderer.xr.getController(i);
+  scene.add(controller);
+  controllers.push(controller);
+
+  const grip = renderer.xr.getControllerGrip(i);
+  scene.add(grip);
+  grips.push(grip);
 }
 
-// Narysuj ogniwa wzdłuż łańcucha
-for(let i=0;i<SEGMENTS;i++){
-const a=points[i],b=points[i+1];
-const middle=a.clone().add(b).multiplyScalar(.5);
-const direction=b.clone().sub(a);
-links[i].position.copy(middle);
-links[i].quaternion.setFromUnitVectors(DOWN,direction.normalize());
-links[i].scale.set(1,Math.max(.25,a.distanceTo(b)/.095),1);
-}
+grips[1].add(vrWeapon);
+
+// Kierunek rzutu i stan kuli
+let flying = false;
+let returning = false;
+let ballVelocity = new THREE.Vector3();
+let previousThrow = false;
+let lastThrowTime = 0;
+
+const startWorld = new THREE.Vector3();
+const endWorld = new THREE.Vector3();
+const tempWorld = new THREE.Vector3();
+const direction = new THREE.Vector3();
+const up = new THREE.Vector3(0, 1, 0);
+
+function getAnchor() {
+  const activeVR = renderer.xr.isPresenting;
+
+  if (activeVR) {
+    vrWeapon.updateWorldMatrix(true, false);
+    return vrWeapon.localToWorld(new THREE.Vector3(0, 0, -0.43));
+  }
+
+  desktopWeapon.updateWorldMatrix(true, false);
+  return desktopWeapon.localToWorld(new THREE.Vector3(0, 0, -0.43));
 }
 
-// Wrogowie z prostym ragdollem
-const enemies=[];
-const ragdolls=[];
+function throwBall() {
+  if (flying || returning) return;
 
-function spawnEnemy(){
-const angle=Math.random()*Math.PI*2;
-const dist=7+Math.random()*6;
-const group=new THREE.Group();
-group.position.set(Math.cos(angle)*dist,0,Math.sin(angle)*dist);
+  const anchor = getAnchor();
+  ball.position.copy(anchor);
 
-const mat=new THREE.MeshStandardMaterial({color:0x1478ff});
-const torso=new THREE.Mesh(new THREE.CapsuleGeometry(.28,.75,4,8),mat);
-torso.position.y=1;
-torso.castShadow=true;
-group.add(torso);
+  if (renderer.xr.isPresenting) {
+    const controller = controllers[1];
+    controller.getWorldDirection(direction);
+  } else {
+    camera.getWorldDirection(direction);
+  }
 
-const head=new THREE.Mesh(
-new THREE.SphereGeometry(.19,12,12),
-new THREE.MeshStandardMaterial({color:0xffc59b})
-);
-head.position.y=1.63;
-group.add(head);
-scene.add(group);
-
-enemies.push({group,hp:3,lastHit:0,alive:true});
+  direction.normalize();
+  ballVelocity.copy(direction).multiplyScalar(8);
+  flying = true;
+  lastThrowTime = performance.now();
 }
 
-function startWave(){
-for(let i=0;i<Math.min(3+Math.floor(enemies.length*.1),12);i++)spawnEnemy();
+function updateChain() {
+  startWorld.copy(getAnchor());
+  endWorld.copy(ball.position);
+
+  const delta = endWorld.clone().sub(startWorld);
+  const distance = delta.length();
+
+  if (distance < 0.001) {
+    for (const link of links) link.visible = false;
+    return;
+  }
+
+  direction.copy(delta).normalize();
+
+  for (let i = 0; i < links.length; i++) {
+    const t = (i + 0.5) / links.length;
+    const link = links[i];
+
+    link.visible = true;
+    link.position.copy(startWorld).lerp(endWorld, t);
+    link.quaternion.setFromUnitVectors(up, direction);
+
+    // Naprzemienne ustawienie ogniw
+    link.rotation.y += i % 2 ? Math.PI / 2 : 0;
+  }
 }
 
-function makeRagdoll(pos){
-const group=new THREE.Group();
-for(let i=0;i<5;i++){
-const limb=new THREE.Mesh(
-new THREE.BoxGeometry(i===0?.36:.14,i===0?.5:.42,.15),
-new THREE.MeshStandardMaterial({color:0x343d4a})
-);
-limb.position.set((Math.random()-.5)*.4,.3+Math.random()*.9,(Math.random()-.5)*.3);
-limb.rotation.set(Math.random()*3,Math.random()*3,Math.random()*3);
-group.add(limb);
-}
-group.position.copy(pos);
-scene.add(group);
-ragdolls.push({group,velocity:new THREE.Vector3((Math.random()-.5)*4,3,(Math.random()-.5)*4),time:performance.now()});
+function returnBall(dt) {
+  const anchor = getAnchor();
+  const delta = anchor.sub(ball.position);
+  const distance = delta.length();
+
+  if (distance < 0.22) {
+    ball.position.copy(anchor);
+    flying = false;
+    returning = false;
+    ballVelocity.set(0, 0, 0);
+    return;
+  }
+
+  delta.normalize();
+  ballVelocity.lerp(delta.multiplyScalar(12), Math.min(1, dt * 5));
+  ball.position.addScaledVector(ballVelocity, dt);
 }
 
-function hitEnemy(enemy,velocity){
-const now=performance.now();
-if(!enemy.alive||now-enemy.lastHit<450)return;
-enemy.lastHit=now;
-enemy.hp--;
-if(velocity.length()>0.5){
-enemy.group.position.addScaledVector(velocity,.025);
-}
-if(enemy.hp<=0){
-enemy.alive=false;
-const pos=enemy.group.position.clone();
-scene.remove(enemy.group);
-makeRagdoll(pos);
-}
+// Chodzenie desktopowe
+const keys = {};
+let yaw = 0;
+let pitch = 0;
+let mouseLocked = false;
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    throwBall();
+  }
+});
+
+addEventListener('keyup', e => {
+  keys[e.code] = false;
+});
+
+renderer.domElement.addEventListener('click', () => {
+  if (!renderer.xr.isPresenting && !mouseLocked) {
+    renderer.domElement.requestPointerLock();
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  mouseLocked = document.pointerLockElement === renderer.domElement;
+});
+
+document.addEventListener('mousemove', e => {
+  if (!mouseLocked || renderer.xr.isPresenting) return;
+  yaw -= e.movementX * 0.002;
+  pitch -= e.movementY * 0.002;
+  pitch = THREE.MathUtils.clamp(pitch, -1.45, 1.45);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+});
+
+addEventListener('mousedown', e => {
+  if (e.button === 0) throwBall();
+});
+
+// Sterowanie VR
+function updateVRMovement(dt) {
+  if (!renderer.xr.isPresenting) return;
+
+  const session = renderer.xr.getSession();
+  if (!session) return;
+
+  let moveX = 0;
+  let moveZ = 0;
+
+  for (const source of session.inputSources) {
+    if (!source.gamepad) continue;
+
+    const axes = source.gamepad.axes;
+    const isLeft = source.handedness === 'left';
+
+    if (isLeft && axes.length >= 2) {
+      moveX = axes[0] || 0;
+      moveZ = axes[1] || 0;
+    }
+
+    if (source.handedness === 'right') {
+      const pressed = source.gamepad.buttons.some(
+        (button, index) => index > 0 && button.pressed
+      );
+
+      if (pressed && !previousThrow) throwBall();
+      previousThrow = pressed;
+    }
+  }
+
+  const xrCamera = renderer.xr.getCamera(camera);
+  const forward = new THREE.Vector3();
+  xrCamera.getWorldDirection(forward);
+  forward.y = 0;
+  forward.normalize();
+
+  const right = new THREE.Vector3()
+    .crossVectors(forward, up)
+    .normalize()
+    .negate();
+
+  const movement = new THREE.Vector3()
+    .addScaledVector(right, moveX)
+    .addScaledVector(forward, -moveZ);
+
+  if (movement.lengthSq() > 1) movement.normalize();
+  movement.multiplyScalar(3 * dt);
+
+  // Przesuwamy scenę przeciwnie do ruchu gracza
+  scene.position.sub(movement);
 }
 
-function movePlayer(dt){
-if(renderer.xr.isPresenting){
-const session=renderer.xr.getSession();
-let input=null;
-for(const source of session.inputSources){
-if(source.handedness==='left'&&source.gamepad){input=source.gamepad;break;}
-}
-if(input){
-const x=input.axes.length>=4?input.axes[2]:input.axes[0];
-const z=input.axes.length>=4?input.axes[3]:input.axes[1];
-const forward=new THREE.Vector3(0,0,-1);
-renderer.xr.getCamera(camera).getWorldDirection(forward);
-forward.y=0;
-forward.normalize();
-const right=new THREE.Vector3().crossVectors(forward,new THREE.Vector3(0,1,0)).normalize().negate();
-player.position.addScaledVector(forward,-z*dt*3);
-player.position.addScaledVector(right,x*dt*3);
-}
-}else{
-const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
-const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
-const speed=dt*3.5;
-if(keys.KeyW||keys.ArrowUp)player.position.addScaledVector(forward,speed);
-if(keys.KeyS||keys.ArrowDown)player.position.addScaledVector(forward,-speed);
-if(keys.KeyA||keys.ArrowLeft)player.position.addScaledVector(right,-speed);
-if(keys.KeyD||keys.ArrowRight)player.position.addScaledVector(right,speed);
-}
-player.position.x=THREE.MathUtils.clamp(player.position.x,-45,45);
-player.position.z=THREE.MathUtils.clamp(player.position.z,-45,45);
+// Proste cele treningowe
+const targets = [];
+
+for (let i = 0; i < 7; i++) {
+  const target = new THREE.Group();
+
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.25, 0.7, 4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x8c4540 })
+  );
+  body.position.y = 0.72;
+  body.castShadow = true;
+  target.add(body);
+
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.2, 12, 10),
+    new THREE.MeshStandardMaterial({ color: 0xc69a78 })
+  );
+  head.position.y = 1.3;
+  head.castShadow = true;
+  target.add(head);
+
+  target.position.set(
+    (Math.random() - 0.5) * 12,
+    0,
+    -5 - Math.random() * 15
+  );
+
+  scene.add(target);
+  targets.push(target);
 }
 
-const clock=new THREE.Clock();
-let waveTimer=0;
+const clock = new THREE.Clock();
 
-function animate(){
-const dt=Math.min(clock.getDelta(),.033);
-movePlayer(dt);
-getHandPosition();
+renderer.xr.addEventListener('sessionstart', () => {
+  status.textContent = 'VR aktywny';
+  desktopWeapon.visible = false;
+  vrWeapon.visible = true;
+  previousThrow = false;
+});
 
-if(!chainReady)resetChain();
-if(handVelocity.lengthSq()<100){
-handVelocity.copy(handWorld).sub(prevHandWorld).divideScalar(Math.max(dt,.001));
-}else handVelocity.set(0,0,0);
+renderer.xr.addEventListener('sessionend', () => {
+  status.textContent = 'Tryb desktopowy';
+  desktopWeapon.visible = true;
+  vrWeapon.visible = true;
+  scene.position.set(0, 0, 0);
+  previousThrow = false;
+});
 
-// Broń śledzi ruch dłoni. Siła pędu jest ograniczona.
-const oldBall=ball.position.clone();
-const handToBall=ball.position.clone().sub(handWorld);
-const distance=handToBall.length();
-if(distance>.65){
-const dir=handToBall.normalize();
-ball.position.addScaledVector(dir,-Math.min((distance-.65)*.12,.12));
-}
-ball.position.addScaledVector(handVelocity,dt*.10);
-ball.position.y=Math.max(.18,ball.position.y-9.81*dt*dt*.15);
-ball.position.lerp(handWorld.clone().add(new THREE.Vector3(0,-.25,-.3)),dt*.025);
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.04);
 
-simulateChain(dt);
+  if (!renderer.xr.isPresenting) {
+    const speed = 4 * dt;
+    const forward = new THREE.Vector3(
+      -Math.sin(yaw), 0, -Math.cos(yaw)
+    );
+    const right = new THREE.Vector3(
+      Math.cos(yaw), 0, -Math.sin(yaw)
+    );
 
-const speed=ball.position.distanceTo(oldBall)/Math.max(dt,.001);
-for(const enemy of enemies){
-if(!enemy.alive)continue;
-const ep=enemy.group.position;
-const toward=new THREE.Vector3(player.position.x-ep.x,0,player.position.z-ep.z);
-const dist=toward.length();
-if(dist>1.1){
-toward.normalize();
-ep.addScaledVector(toward,dt*1.1);
-enemy.group.lookAt(player.position.x,0,player.position.z);
-}else if(performance.now()-lastDamage>900){
-hp=Math.max(0,hp-2);
-lastDamage=performance.now();
-document.getElementById('hp').textContent=hp;
-if(hp<=0)gameEnded=true;
-}
-if(ball.position.distanceTo(ep.clone().add(new THREE.Vector3(0,1,0)))<.7){
-hitEnemy(enemy,handVelocity.clone().multiplyScalar(Math.min(speed,8)));
-}
-}
+    if (keys.KeyW) camera.position.addScaledVector(forward, speed);
+    if (keys.KeyS) camera.position.addScaledVector(forward, -speed);
+    if (keys.KeyA) camera.position.addScaledVector(right, -speed);
+    if (keys.KeyD) camera.position.addScaledVector(right, speed);
+    if (keys.ShiftLeft) camera.position.addScaledVector(forward, speed);
+    if (keys.ControlLeft) camera.position.addScaledVector(forward, -speed);
+  } else {
+    updateVRMovement(dt);
+  }
 
-for(let i=enemies.length-1;i>=0;i--){
-if(!enemies[i].alive)enemies.splice(i,1);
-}
-document.getElementById('enemies').textContent=enemies.length;
+  if (flying) {
+    ballVelocity.y -= 5.5 * dt;
+    ball.position.addScaledVector(ballVelocity, dt);
 
-for(let i=ragdolls.length-1;i>=0;i--){
-const r=ragdolls[i];
-r.velocity.y-=9.81*dt;
-r.group.position.addScaledVector(r.velocity,dt);
-if(r.group.position.y<0){
-r.group.position.y=0;
-r.velocity.y=Math.abs(r.velocity.y)*.25;
-r.velocity.x*=.8;
-r.velocity.z*=.8;
-}
-r.group.rotation.x+=r.velocity.z*dt*.1;
-r.group.rotation.z+=r.velocity.x*dt*.1;
-if(performance.now()-r.time>5000){
-scene.remove(r.group);
-ragdolls.splice(i,1);
-}
-}
+    // Odbicie od ziemi
+    if (ball.position.y < 0.17) {
+      ball.position.y = 0.17;
+      ballVelocity.y = Math.abs(ballVelocity.y) * 0.55;
+      ballVelocity.x *= 0.8;
+      ballVelocity.z *= 0.8;
+    }
 
-waveTimer+=dt;
-if(enemies.length===0&&waveTimer>2&&!gameEnded){
-waveTimer=0;
-startWave();
-}
-document.getElementById('mode').textContent=renderer.xr.isPresenting?'Tryb: VR':'Tryb: ekran';
-renderer.render(scene,camera);
+    // Automatyczny powrót po chwili
+    if (performance.now() - lastThrowTime > 1300) {
+      flying = false;
+      returning = true;
+    }
+  }
+
+  if (returning) returnBall(dt);
+
+  if (!flying && !returning) {
+    ball.position.copy(getAnchor());
+  }
+
+  // Trafienie w cele
+  if (flying) {
+    for (const target of targets) {
+      if (!target.visible) continue;
+
+      const targetCenter = target.position.clone();
+      targetCenter.y += 0.8;
+
+      if (ball.position.distanceTo(targetCenter) < 0.65) {
+        target.visible = false;
+        flying = false;
+        returning = true;
+        break;
+      }
+    }
+  }
+
+  updateChain();
+
+  // Obrót kuli podczas lotu
+  if (flying) {
+    ball.rotation.x += dt * 8;
+    ball.rotation.z += dt * 10;
+  }
+
+  renderer.render(scene, camera);
 }
 
 renderer.setAnimationLoop(animate);
 
-addEventListener('resize',()=>{
-camera.aspect=innerWidth/innerHeight;
-camera.updateProjectionMatrix();
-renderer.setSize(innerWidth,innerHeight);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
 });
 </script>
 </body>
